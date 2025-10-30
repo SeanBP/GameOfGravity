@@ -289,6 +289,7 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
     Advanced AI move for Game.
     If depth=0, chooses a random valid move.
     If depth>0, performs a depth-limited search using a simple heuristic.
+    Prefers early wins and delayed losses.
     """
 
     ai_color = game.current_player
@@ -307,46 +308,51 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
         return
 
     # --- Heuristic for a given board state ---
-    def heuristic_score(state: Game, ai_color: str) -> int:
+    def heuristic_score(state, ai_color):
         hole_r, hole_c = state.hole
-        opponent_color = WHITE if ai_color == BLACK else BLACK
-        ai_score, opp_score = 0, 0
+        ai_score = 0
 
         for r in range(state.n):
             for c in range(state.n):
                 cell = state.board[r][c]
-                if cell in (EMPTY, HOLE):
+                if cell in (None, 'HOLE'):
                     continue
 
-                # Chebyshev distance treats diagonal same as orthogonal
-                dist = max(abs(r - hole_r), abs(c - hole_c))
+                dist = abs(r - hole_r) + abs(c - hole_c)
+                dist += 2 * max(abs(r - hole_r), abs(c - hole_c))
                 dist_sq = dist ** 2
 
                 if cell == ai_color:
-                    ai_score += 1 * dist_sq
-                #elif cell == opponent_color:
-                #    opp_score += 1 * dist_sq 
+                    ai_score += 1 / dist_sq
 
-        return ai_score - opp_score
-
+        return -ai_score
 
     # --- Recursive search ---
     def search(state: Game, current_depth: int, is_ai_turn: bool) -> Optional[tuple[int, int]]:
         if cancel_flag():
             return None
+
+        # --- Terminal state: win/loss ---
+        if state.winner is not None:
+            score = WIN_SCORE if state.winner == ai_color else LOSS_SCORE
+            return score, current_depth  # always positive
+
+        # --- Stop at max depth ---
         if current_depth == depth:
             return heuristic_score(state, ai_color), current_depth
 
         moves = state.list_valid_moves()
-        child_results = []
+        if not moves:
+            return LOSS_SCORE, current_depth  # no moves = loss
 
+        child_results = []
         for move in moves:
             # Skip turn
             if move["from"] is None:
                 new_state = copy.deepcopy(state)
                 new_state.apply_move(None, None, None)
                 result = search(new_state, current_depth + 1, not is_ai_turn)
-                if result is not None:
+                if result:
                     child_results.append(result)
                 continue
 
@@ -354,41 +360,62 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
             for target in move["targets"]:
                 new_state = copy.deepcopy(state)
                 new_state.apply_move(move["from"], move["to"], target)
-
-                # Immediate win/loss pruning
-                if new_state.winner is not None:
-                    score = WIN_SCORE if new_state.winner == ai_color else LOSS_SCORE
-                    child_results.append((score, current_depth))
-                    continue
-
                 result = search(new_state, current_depth + 1, not is_ai_turn)
-                if result is not None:
+                if result:
                     child_results.append(result)
 
         if not child_results:
-            return None
+            return LOSS_SCORE, current_depth
 
-        # Max for AI, Min for opponent
+        # --- Scoring preference rules ---
+        def ai_sort_key(r):
+            score, depth_val = r
+            if score == WIN_SCORE:
+                return (score, -depth_val)  # prefer early wins
+            elif score == LOSS_SCORE:
+                return (score, depth_val)   # prefer delayed losses
+            else:
+                return (score, -depth_val)
+
+        def opp_sort_key(r):
+            score, depth_val = r
+            if score == WIN_SCORE:
+                return (score, depth_val)   # opponent delays AI's win
+            elif score == LOSS_SCORE:
+                return (score, -depth_val)  # opponent wants AI to lose early
+            else:
+                return (score, depth_val)
+
         if is_ai_turn:
-            return max(child_results, key=lambda r: (r[0], -r[1]))
+            return max(child_results, key=ai_sort_key)
         else:
-            return min(child_results, key=lambda r: (r[0], -r[1]))
+            return min(child_results, key=opp_sort_key)
 
     # --- Root-level: pick the best move ---
+    def key_for_root(score: int, depth_val: int):
+        if score == WIN_SCORE:
+            return (score, -depth_val)  # early win better
+        elif score == LOSS_SCORE:
+            return (score, depth_val)   # late loss better
+        else:
+            return (score, -depth_val)
+
     best_move = None
-    best_score = (LOSS_SCORE, sys.maxsize)  # (score, depth)
+    best_key = (LOSS_SCORE, -sys.maxsize)
+    root_depth = 0
 
     for move in game.list_valid_moves():
         # Skip turn
         if move["from"] is None and move["to"] is None:
             new_state = copy.deepcopy(game)
             new_state.apply_move(None, None, None)
-            result = search(new_state, 1, is_ai_turn=False)
-            if result is None:
+            result = search(new_state, root_depth + 1, is_ai_turn=False)
+            if not result:
                 continue
             score, depth_reached = result
-            if (score, -depth_reached) > (best_score[0], -best_score[1]):
-                best_score = (score, depth_reached)
+            candidate_key = key_for_root(score, depth_reached)
+            if candidate_key > best_key:
+                best_key = candidate_key
                 best_move = (None, None, None)
             continue
 
@@ -396,31 +423,23 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
         for target in move["targets"]:
             new_state = copy.deepcopy(game)
             new_state.apply_move(move["from"], move["to"], target)
-
-            # Immediate win/loss pruning
-            if new_state.winner is not None:
-                score = WIN_SCORE if new_state.winner == ai_color else LOSS_SCORE
-                if (score, 0) > (best_score[0], -best_score[1]):
-                    best_score = (score, 0)
-                    best_move = (move["from"], move["to"], target)
-                continue
-
-            result = search(new_state, 1, is_ai_turn=False)
-            if result is None:
+            result = search(new_state, root_depth + 1, is_ai_turn=False)
+            if not result:
                 continue
             score, depth_reached = result
-            if (score, -depth_reached) > (best_score[0], -best_score[1]):
-                best_score = (score, depth_reached)
+            candidate_key = key_for_root(score, depth_reached)
+            if candidate_key > best_key:
+                best_key = candidate_key
                 best_move = (move["from"], move["to"], target)
 
     # --- Apply or return ---
     if best_move and not cancel_flag():
+        move_from, move_to, target = best_move
+        #print("AI selected move:", best_move, "Score:", best_key[0], "Depth:", best_key[1])
         if apply_move:
-            move_from, move_to, target = best_move
             game.apply_move(move_from, move_to, target)
         else:
             return best_move
-
 
 # ---------- Menu ----------
 def mode_selection(screen, clock, width, height, font):
@@ -430,18 +449,18 @@ def mode_selection(screen, clock, width, height, font):
     grid_size = 7  # default
     ai_depth = 2   # default depth
 
-    # --- Maximum AI depths per board size ---
     MAX_AI_DEPTH = {
-        5: 8,
         7: 6,
         9: 5
     }
 
     # --- Buttons ---
-    # Board size
-    grid_5_btn = pygame.Rect(width//2 - 180, height//2 - 180, 100, BUTTON_HEIGHT_MENU)
-    grid_7_btn = pygame.Rect(width//2 - 50, height//2 - 180, 100, BUTTON_HEIGHT_MENU)
-    grid_9_btn = pygame.Rect(width//2 + 80, height//2 - 180, 100, BUTTON_HEIGHT_MENU)
+    # Board size (2 buttons, centered)
+    button_width = 100
+    gap = 20
+    total_width = 2 * button_width + gap
+    grid_7_btn = pygame.Rect(width//2 - total_width//2, height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
+    grid_9_btn = pygame.Rect(width//2 - total_width//2 + button_width + gap, height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
 
     # Mode buttons
     pvp_btn = pygame.Rect(width//2 - BUTTON_WIDTH//2, height//2 - 90, BUTTON_WIDTH, BUTTON_HEIGHT_MENU)
@@ -454,13 +473,11 @@ def mode_selection(screen, clock, width, height, font):
 
     while selecting_mode:
         screen.fill((30,30,30))
-        # --- Title ---
         title = font.render("Game of Gravity", True, (255,255,255))
         screen.blit(title, (width//2 - title.get_width()//2, height//2 - 250))
 
         # --- Board size buttons ---
         grid_buttons = [
-            {"rect": grid_5_btn, "size": 5},
             {"rect": grid_7_btn, "size": 7},
             {"rect": grid_9_btn, "size": 9},
         ]
@@ -498,7 +515,6 @@ def mode_selection(screen, clock, width, height, font):
                 for btn in grid_buttons:
                     if btn["rect"].collidepoint((mx,my)):
                         grid_size = btn["size"]
-                        # Adjust AI depth if exceeding new max
                         ai_depth = min(ai_depth, MAX_AI_DEPTH[grid_size])
 
                 # Mode selection
@@ -526,7 +542,6 @@ def mode_selection(screen, clock, width, height, font):
                                 ai_depth = round(max_depth_for_grid * (new_x - slider_rect.x)/(slider_rect.width - knob_width))
                                 ai_depth = max(0, min(max_depth_for_grid, ai_depth))
 
-                        # Redraw slider while dragging
                         screen.fill((30,30,30))
                         screen.blit(title, (width//2 - title.get_width()//2, height//2 - 250))
                         for btn in grid_buttons:
@@ -553,6 +568,7 @@ def mode_selection(screen, clock, width, height, font):
         clock.tick(FPS)
 
     return mode, player_is_white, grid_size, ai_depth
+
 
 
 
@@ -893,7 +909,7 @@ def run_game():
                     screen.blit(status_text, (width//2 - status_text.get_width()//2, 10))
                 elif waiting_skip or game.last_skipped:
                     if pygame.time.get_ticks() - skip_display_time < 2000:
-                        status_text = footer_font.render(f"{game.current_player} has no valid moves! Turn skipped.", True, (255,0,0))
+                        status_text = footer_font.render(f"No valid moves! Turn skipped.", True, (255,0,0))
                         screen.blit(status_text, (width//2 - status_text.get_width()//2, 10))
 
                 # Turn
@@ -901,9 +917,6 @@ def run_game():
                 screen.blit(turn_text, (width - turn_text.get_width() - 10, 10))
 
             pygame.display.flip()
-
-
-
 
 if __name__=="__main__":
     run_game()
