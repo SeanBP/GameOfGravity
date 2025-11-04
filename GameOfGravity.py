@@ -23,10 +23,6 @@ DIRECTIONS = {
     "S": (1, 0),
     "E": (0, 1),
     "W": (0, -1),
-    #"NE": (-1, 1),
-    #"NW": (-1, -1),
-    #"SE": (1, 1),
-    #"SW": (1, -1),
 }
 
 class Game:
@@ -85,9 +81,9 @@ class Game:
                     if (dr == 0 or dc == 0) and abs(nr - r) + abs(nc - c) > 1:
                         # Cardinal directions
                         visible.append((nr, nc))
-                    elif dr != 0 and dc != 0 and abs(nr - r) > 1:
+                    #elif dr != 0 and dc != 0 and abs(nr - r) > 1:
                         # Diagonal directions: must be at least 1 diagonal step away
-                        visible.append((nr, nc))
+                     #   visible.append((nr, nc))
                     break
                 nr += dr
                 nc += dc
@@ -103,19 +99,12 @@ class Game:
                     nr, nc = r + dr, c + dc
                     if not self.in_bounds(nr, nc) or self.board[nr][nc] != EMPTY:
                         continue
-                    # Prevent undoing last pull
-                    #if (
-                    #    self.last_pulled_ship == (r, c) and
-                    #    (nr, nc) == self.last_pulled_from and
-                    #    self.current_player == self.last_pulled_player
-                    #):
-                    #    continue
 
                     # --- Chebyshev distance check ---  # <-- NEW
-                    old_dist = max(abs(r - self.hole[0]), abs(c - self.hole[1]))  # <-- NEW
-                    new_dist = max(abs(nr - self.hole[0]), abs(nc - self.hole[1]))  # <-- NEW
-                    if new_dist > old_dist:  # move would increase distance  # <-- NEW
-                        continue  # <-- NEW
+                    old_dist = max(abs(r - self.hole[0]), abs(c - self.hole[1]))  
+                    new_dist = max(abs(nr - self.hole[0]), abs(nc - self.hole[1]))  
+                    if new_dist > old_dist:  # move would increase distance 
+                        continue
 
                     # Temporarily apply the move
                     self.board[r][c] = EMPTY
@@ -134,7 +123,11 @@ class Game:
                             0 if pull_dir[0] == 0 else pull_dir[0] // abs(pull_dir[0]),
                             0 if pull_dir[1] == 0 else pull_dir[1] // abs(pull_dir[1])
                         )
-                        if pull_dir == (-move_dir[0], -move_dir[1]):
+                        move_dir_norm = (
+                            0 if move_dir[0] == 0 else move_dir[0] // abs(move_dir[0]),
+                            0 if move_dir[1] == 0 else move_dir[1] // abs(move_dir[1])
+                        )
+                        if pull_dir == (-move_dir_norm[0], -move_dir_norm[1]):
                             continue
 
                         # Simulate pull
@@ -162,9 +155,6 @@ class Game:
 
         if not moves:
             moves.append({'from': None, 'to': None, 'targets': None})
-        #if not moves:
-        # Instead of None, use an empty list for targets
-        #    moves.append({'from': None, 'to': None, 'targets': []})
 
         return moves
 
@@ -284,19 +274,21 @@ def wrap_text(text, font, max_width):
     return lines
 
 # ---------- AI ----------
-def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=True):
+def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=True, weighted_random=False):
     """
     Advanced AI move for Game.
     If depth=0, chooses a random valid move.
     If depth>0, performs a depth-limited search using a simple heuristic.
     Prefers early wins and delayed losses.
+    If weighted_random=True, randomly selects between the best and second-best move
+    with probability proportional to their relative scores,
+    except that WIN_SCORE is always chosen and LOSS_SCORE is avoided unless all moves are losses.
     """
 
     ai_color = game.current_player
     WIN_SCORE = sys.maxsize
     LOSS_SCORE = -sys.maxsize
 
-    # --- Depth 0: random move ---
     if depth == 0:
         moves = game.list_valid_moves()
         move = random.choice(moves)
@@ -307,47 +299,36 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
             return move
         return
 
-    # --- Heuristic for a given board state ---
     def heuristic_score(state, ai_color):
         hole_r, hole_c = state.hole
         ai_score = 0
-
         for r in range(state.n):
             for c in range(state.n):
                 cell = state.board[r][c]
                 if cell in (None, 'HOLE'):
                     continue
-
                 dist = abs(r - hole_r) + abs(c - hole_c)
                 dist += 2 * max(abs(r - hole_r), abs(c - hole_c))
                 dist_sq = dist ** 2
-
                 if cell == ai_color:
                     ai_score += 1 / dist_sq
-
         return -ai_score
 
-    # --- Recursive search ---
-    def search(state: Game, current_depth: int, is_ai_turn: bool) -> Optional[tuple[int, int]]:
+    def search(state: Game, current_depth: int, is_ai_turn: bool):
         if cancel_flag():
             return None
-
-        # --- Terminal state: win/loss ---
         if state.winner is not None:
             score = WIN_SCORE if state.winner == ai_color else LOSS_SCORE
-            return score, current_depth  # always positive
-
-        # --- Stop at max depth ---
+            return score, current_depth
         if current_depth == depth:
             return heuristic_score(state, ai_color), current_depth
 
         moves = state.list_valid_moves()
         if not moves:
-            return LOSS_SCORE, current_depth  # no moves = loss
+            return LOSS_SCORE, current_depth
 
         child_results = []
         for move in moves:
-            # Skip turn
             if move["from"] is None:
                 new_state = copy.deepcopy(state)
                 new_state.apply_move(None, None, None)
@@ -355,8 +336,6 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
                 if result:
                     child_results.append(result)
                 continue
-
-            # Normal moves
             for target in move["targets"]:
                 new_state = copy.deepcopy(state)
                 new_state.apply_move(move["from"], move["to"], target)
@@ -367,87 +346,106 @@ def ai_advanced_move(game: Game, depth=0, cancel_flag=lambda: False, apply_move=
         if not child_results:
             return LOSS_SCORE, current_depth
 
-        # --- Scoring preference rules ---
         def ai_sort_key(r):
             score, depth_val = r
             if score == WIN_SCORE:
-                return (score, -depth_val)  # prefer early wins
+                return (score, -depth_val)
             elif score == LOSS_SCORE:
-                return (score, depth_val)   # prefer delayed losses
+                return (score, depth_val)
             else:
                 return (score, -depth_val)
 
         def opp_sort_key(r):
             score, depth_val = r
             if score == WIN_SCORE:
-                return (score, depth_val)   # opponent delays AI's win
+                return (score, depth_val)
             elif score == LOSS_SCORE:
-                return (score, -depth_val)  # opponent wants AI to lose early
+                return (score, -depth_val)
             else:
                 return (score, depth_val)
 
-        if is_ai_turn:
-            return max(child_results, key=ai_sort_key)
-        else:
-            return min(child_results, key=opp_sort_key)
+        return max(child_results, key=ai_sort_key) if is_ai_turn else min(child_results, key=opp_sort_key)
 
-    # --- Root-level: pick the best move ---
     def key_for_root(score: int, depth_val: int):
         if score == WIN_SCORE:
-            return (score, -depth_val)  # early win better
+            return (score, -depth_val)
         elif score == LOSS_SCORE:
-            return (score, depth_val)   # late loss better
+            return (score, depth_val)
         else:
             return (score, -depth_val)
 
-    best_move = None
-    best_key = (LOSS_SCORE, -sys.maxsize)
-    root_depth = 0
-
+    move_candidates = []
     for move in game.list_valid_moves():
-        # Skip turn
         if move["from"] is None and move["to"] is None:
             new_state = copy.deepcopy(game)
             new_state.apply_move(None, None, None)
-            result = search(new_state, root_depth + 1, is_ai_turn=False)
+            result = search(new_state, 1, is_ai_turn=False)
             if not result:
                 continue
             score, depth_reached = result
-            candidate_key = key_for_root(score, depth_reached)
-            if candidate_key > best_key:
-                best_key = candidate_key
-                best_move = (None, None, None)
+            move_candidates.append(((None, None, None), key_for_root(score, depth_reached)))
             continue
-
-        # Normal moves
         for target in move["targets"]:
             new_state = copy.deepcopy(game)
             new_state.apply_move(move["from"], move["to"], target)
-            result = search(new_state, root_depth + 1, is_ai_turn=False)
+            result = search(new_state, 1, is_ai_turn=False)
             if not result:
                 continue
             score, depth_reached = result
-            candidate_key = key_for_root(score, depth_reached)
-            if candidate_key > best_key:
-                best_key = candidate_key
-                best_move = (move["from"], move["to"], target)
+            move_candidates.append(((move["from"], move["to"], target), key_for_root(score, depth_reached)))
 
-    # --- Apply or return ---
-    if best_move and not cancel_flag():
-        move_from, move_to, target = best_move
-        #print("AI selected move:", best_move, "Score:", best_key[0], "Depth:", best_key[1])
-        if apply_move:
-            game.apply_move(move_from, move_to, target)
+    if not move_candidates or cancel_flag():
+        return
+
+    move_candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # --- Priority logic ---
+    # If any WIN move exists → pick it immediately
+    win_moves = [m for m in move_candidates if m[1][0] == WIN_SCORE]
+    if win_moves:
+        chosen_move = win_moves[0][0]
+
+    else:
+        non_loss_moves = [m for m in move_candidates if m[1][0] != LOSS_SCORE]
+
+        # If no non-loss moves exist, keep all loss moves (pick least-bad)
+        if non_loss_moves:
+            pool = non_loss_moves
         else:
-            return best_move
+            pool = move_candidates  # all losses
 
+        pool.sort(key=lambda x: x[1], reverse=True)
+        best_move, best_key = pool[0]
+
+        if weighted_random and len(pool) > 1:
+            second_move, second_key = pool[1]
+            s1 = max(best_key[0], LOSS_SCORE + 1)
+            s2 = max(second_key[0], LOSS_SCORE + 1)
+            total = s1 + s2
+            if random.random() > s1 / total:
+                chosen_move = second_move
+            else:
+                chosen_move = best_move
+        else:
+            chosen_move = best_move
+
+    move_from, move_to, target = chosen_move
+    if apply_move:
+        game.apply_move(move_from, move_to, target)
+    else:
+        return chosen_move
+
+
+
+# ------------------- Mode Selection ------------------- #
 # ---------- Menu ----------
 def mode_selection(screen, clock, width, height, font):
     selecting_mode = True
     mode = None
     player_is_white = True
-    grid_size = 7  # default
+    grid_size = 9  # default
     ai_depth = 2   # default depth
+    weighted_ai_enabled = True
 
     MAX_AI_DEPTH = {
         7: 6,
@@ -470,6 +468,11 @@ def mode_selection(screen, clock, width, height, font):
     # AI depth slider
     slider_rect = pygame.Rect(width//2 - 150, height//2 + 120, 300, 20)
     knob_width = 20
+
+    # Weighted AI toggle
+    button_width = 250  # any width you want
+    toggle_rect = pygame.Rect(width//2 - button_width//2, height//2 + 180, button_width, 40)
+
 
     while selecting_mode:
         screen.fill((30,30,30))
@@ -504,12 +507,25 @@ def mode_selection(screen, clock, width, height, font):
         depth_text = font.render(f"AI search depth: {ai_depth}", True, (255,255,255))
         screen.blit(depth_text, (width//2 - depth_text.get_width()//2, slider_rect.y + 30))
 
+        # --- Weighted AI toggle ---
+        toggle_color = (0,200,0) if weighted_ai_enabled else (150,150,150)
+        pygame.draw.rect(screen, toggle_color, toggle_rect)
+        pygame.draw.rect(screen, (0,0,0), toggle_rect, 2)
+        toggle_text = "Randomized AI: ON" if weighted_ai_enabled else "Randomized AI: OFF"
+        text_surf = font.render(toggle_text, True, (0,0,0))
+        screen.blit(text_surf, text_surf.get_rect(center=toggle_rect.center))
+
         # --- Event handling ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return None, None, None, None
+                return None, None, None, None, None
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mx,my = event.pos
+
+                # Weighted AI toggle
+                if toggle_rect.collidepoint((mx,my)):
+                    weighted_ai_enabled = not weighted_ai_enabled
+                    continue
 
                 # Board size selection
                 for btn in grid_buttons:
@@ -561,18 +577,23 @@ def mode_selection(screen, clock, width, height, font):
                         pygame.draw.rect(screen, (255,255,0), knob_rect)
                         depth_text = font.render(f"AI search depth: {ai_depth}", True, (255,255,255))
                         screen.blit(depth_text, (width//2 - depth_text.get_width()//2, slider_rect.y + 30))
+                        # Re-draw toggle while dragging
+                        toggle_color = (0,200,0) if weighted_ai_enabled else (150,150,150)
+                        pygame.draw.rect(screen, toggle_color, toggle_rect)
+                        pygame.draw.rect(screen, (0,0,0), toggle_rect, 2)
+                        toggle_text = "Randomized AI: ON" if weighted_ai_enabled else "Randomized AI: OFF"
+                        text_surf = font.render(toggle_text, True, (0,0,0))
+                        screen.blit(text_surf, text_surf.get_rect(center=toggle_rect.center))
+
                         pygame.display.flip()
                         clock.tick(FPS)
 
         pygame.display.flip()
         clock.tick(FPS)
 
-    return mode, player_is_white, grid_size, ai_depth
+    return mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled
 
-
-
-
-
+# ------------------- Run Game ------------------- #
 def run_game():
     pygame.init()
     width_default, height_default = 7*TILE_SIZE, BUTTON_HEIGHT + 7*TILE_SIZE + FOOTER_HEIGHT
@@ -596,7 +617,6 @@ def run_game():
         "  • Line of sight: same row or column, not adjacent, and unblocked.",
         "- After moving, pull one visible enemy ship one square closer.",
         "  • Cannot pull from the direction you just moved from.",
-        #"  • Cannot undo last move's pull.",
         "- Win by pulling an enemy ship into the black hole."
     ]
 
@@ -610,10 +630,9 @@ def run_game():
 
     while True:
         result = mode_selection(screen, clock, width_default, height_default, font)
-        mode, player_is_white, grid_size, *rest = result
+        mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled = result
         if mode is None or grid_size is None:
             return
-        ai_depth = rest[0] if rest else 0
 
         n = grid_size
         width, height = n*TILE_SIZE, BUTTON_HEIGHT + n*TILE_SIZE + FOOTER_HEIGHT
@@ -621,7 +640,7 @@ def run_game():
 
         # --- Initialize game state ---
         game = Game(n)
-        game.current_player = WHITE  # Always start with WHITE
+        game.current_player = WHITE
         game.winner = None
 
         selected = None
@@ -638,7 +657,7 @@ def run_game():
         skipped_turns = 0
         waiting_skip = False
         skip_display_time = 0
-        just_restarted = True  # new game or after restart
+        just_restarted = True
         showing_rules = False
 
         button_labels = ["Menu", "Restart", "Hint", "Rules"]
@@ -707,7 +726,6 @@ def run_game():
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = event.pos
 
-                    # Rules back button
                     if showing_rules:
                         back_btn = pygame.Rect(10, screen.get_height()-45, 120, 35)
                         if back_btn.collidepoint((mx, my)):
@@ -715,7 +733,6 @@ def run_game():
                             screen = pygame.display.set_mode((width, height))
                         continue
 
-                    # Menu
                     if menu_btn.collidepoint((mx,my)):
                         if ai_thread and ai_thread.is_alive():
                             ai_cancel = True
@@ -727,7 +744,6 @@ def run_game():
                         screen = pygame.display.set_mode((width_default, height_default))
                         break
 
-                    # Restart
                     if restart_btn.collidepoint((mx,my)):
                         if ai_busy:
                             continue
@@ -739,7 +755,7 @@ def run_game():
                             hint_ai_thread.join()
 
                         game = Game(n)
-                        game.current_player = WHITE  # Always start with white
+                        game.current_player = WHITE
                         game.winner = None
                         selected = None
                         valid_moves = []
@@ -756,7 +772,6 @@ def run_game():
                         just_restarted = True
                         continue
 
-                    # Hint
                     if hint_btn.collidepoint((mx,my)) and not game.winner and not is_ai_turn:
                         if ai_busy:
                             continue
@@ -777,7 +792,8 @@ def run_game():
                                 best_move = ai_advanced_move(
                                     game, depth=ai_depth,
                                     cancel_flag=lambda: hint_ai_cancel,
-                                    apply_move=False
+                                    apply_move=False,
+                                    weighted_random=False
                                 )
                                 if not hint_ai_cancel:
                                     nonlocal hint_move
@@ -786,13 +802,11 @@ def run_game():
                             hint_ai_thread.start()
                         continue
 
-                    # Rules
                     if rules_btn.collidepoint((mx,my)):
                         showing_rules = True
                         screen = pygame.display.set_mode((rules_width, rules_height))
                         continue
 
-                    # Board clicks
                     if game.winner or is_ai_turn:
                         continue
                     if BUTTON_HEIGHT <= my < BUTTON_HEIGHT + n*TILE_SIZE:
@@ -816,12 +830,14 @@ def run_game():
                         elif selected and (r,c) in valid_moves:
                             move_from = selected
                             move_to = (r,c)
-                            temp_val = game.board[move_from[0]][move_from[1]]
-                            game.board[move_from[0]][move_from[1]] = EMPTY
-                            game.board[move_to[0]][move_to[1]] = game.current_player
-                            valid_targets = game.compute_los(move_to[0], move_to[1])
-                            game.board[move_to[0]][move_to[1]] = EMPTY
-                            game.board[move_from[0]][move_from[1]] = temp_val
+
+                            # --- FIXED: Collect all valid targets for this move ---
+                            all_moves = game.list_valid_moves()
+                            valid_targets = []
+                            for m in all_moves:
+                                if m['from'] == move_from and m['to'] == move_to:
+                                    valid_targets.extend(m['targets'])
+
                             if valid_targets:
                                 selecting_target = True
                             else:
@@ -837,7 +853,6 @@ def run_game():
 
             # --- AI automatic turn ---
             if is_ai_turn and ai_thread is None and not game.winner:
-                # Block AI only if human is first after restart
                 if just_restarted and ((game.current_player == WHITE and player_is_white) or
                                        (game.current_player == BLACK and not player_is_white)):
                     just_restarted = False
@@ -846,7 +861,7 @@ def run_game():
                     ai_cancel = False
                     def ai_job():
                         pygame.time.wait(1000)
-                        ai_advanced_move(game, depth=ai_depth, cancel_flag=lambda: ai_cancel)
+                        ai_advanced_move(game, depth=ai_depth, cancel_flag=lambda: ai_cancel, weighted_random=weighted_ai_enabled)
                     ai_thread = threading.Thread(target=ai_job)
                     ai_thread.start()
 
@@ -869,7 +884,6 @@ def run_game():
             else:
                 draw_board(screen, game, selected, valid_moves, valid_targets)
 
-                # Chebyshev rings
                 cx, cy = game.hole[1], game.hole[0]
                 max_ring = game.n // 2
                 ring_color = (160, 32, 240)
@@ -880,7 +894,6 @@ def run_game():
                     size = (2*r + 1) * TILE_SIZE
                     pygame.draw.rect(screen, ring_color, pygame.Rect(x, y, size, size), ring_thickness)
 
-                # Draw hint moves
                 if hint_move is not None:
                     mf, mt, target = hint_move
                     if mf is not None:
@@ -893,13 +906,11 @@ def run_game():
                         pygame.draw.rect(screen, (255,255,0), pygame.Rect(
                             target[1]*TILE_SIZE, BUTTON_HEIGHT + target[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 4)
 
-                # Footer buttons
                 draw_button(screen, menu_btn, "Menu", font)
                 draw_button(screen, restart_btn, "Restart", font)
                 draw_button(screen, hint_btn, "Hint", font)
                 draw_button(screen, rules_btn, "Rules", font)
 
-                # Status text
                 if ai_busy:
                     status_text = footer_font.render("AI is thinking...", True, (255,255,0))
                     screen.blit(status_text, (width//2 - status_text.get_width()//2, 10))
@@ -912,11 +923,11 @@ def run_game():
                         status_text = footer_font.render(f"No valid moves! Turn skipped.", True, (255,0,0))
                         screen.blit(status_text, (width//2 - status_text.get_width()//2, 10))
 
-                # Turn
                 turn_text = footer_font.render(f"Turn: {game.current_player}", True, (255,255,255))
                 screen.blit(turn_text, (width - turn_text.get_width() - 10, 10))
 
             pygame.display.flip()
+
 
 if __name__=="__main__":
     run_game()
