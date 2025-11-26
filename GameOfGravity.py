@@ -26,13 +26,14 @@ DIRECTIONS = {
 }
 
 class Game:
-    def __init__(self, n=7):
+    def __init__(self, n=7, rings_enabled=True):
         if n % 2 == 0:
             raise ValueError("Board size must be odd")
         self.n = n
         self.board = [[EMPTY for _ in range(n)] for _ in range(n)]
         self.hole = (n // 2, n // 2)
         self.board[self.hole[0]][self.hole[1]] = HOLE
+        self.rings_enabled = rings_enabled
 
         # --- Place Black pieces (top row) ---
         for c in range(n):
@@ -100,11 +101,11 @@ class Game:
                     if not self.in_bounds(nr, nc) or self.board[nr][nc] != EMPTY:
                         continue
 
-                    # --- Chebyshev distance check ---  # <-- NEW
-                    old_dist = max(abs(r - self.hole[0]), abs(c - self.hole[1]))  
-                    new_dist = max(abs(nr - self.hole[0]), abs(nc - self.hole[1]))  
-                    if new_dist > old_dist:  # move would increase distance 
-                        continue
+                    if self.rings_enabled:
+                        old_dist = max(abs(r - self.hole[0]), abs(c - self.hole[1]))
+                        new_dist = max(abs(nr - self.hole[0]), abs(nc - self.hole[1]))
+                        if new_dist > old_dist:
+                            continue
 
                     # Temporarily apply the move
                     self.board[r][c] = EMPTY
@@ -205,7 +206,7 @@ class Game:
 
 
 # ---------- Pygame GUI ----------
-TILE_SIZE = 80
+TILE_SIZE = 70
 FPS = 30
 BUTTON_HEIGHT = 50
 FOOTER_HEIGHT = 60
@@ -229,11 +230,14 @@ BUTTON_HEIGHT_MENU = 55
 # --- draw functions ---
 def draw_board(screen, game: Game, selected=None, valid_moves=None, valid_targets=None):
     n = game.n
+
+    # --- 1. Draw board tiles and pieces ---
     for r in range(n):
         for c in range(n):
             rect = pygame.Rect(c*TILE_SIZE, BUTTON_HEIGHT + r*TILE_SIZE, TILE_SIZE, TILE_SIZE)
             color = LIGHT_COLOR if (r+c)%2==0 else DARK_COLOR
             pygame.draw.rect(screen, color, rect)
+
             piece = game.board[r][c]
             if piece == WHITE:
                 pygame.draw.circle(screen, WHITE_COLOR, rect.center, TILE_SIZE//3)
@@ -243,12 +247,32 @@ def draw_board(screen, game: Game, selected=None, valid_moves=None, valid_target
                 pygame.draw.circle(screen, WHITE_COLOR, rect.center, TILE_SIZE//3, 2)
             elif piece == HOLE:
                 pygame.draw.circle(screen, HOLE_COLOR, rect.center, TILE_SIZE//2)
+
+    # --- 2. Draw purple rings UNDER highlights but OVER tiles ---
+    if game.rings_enabled:
+        cx, cy = game.hole[1], game.hole[0]
+        max_ring = n // 2
+        ring_color = (160, 32, 240)
+        ring_thickness = 8
+        for r in range(1, max_ring+1):
+            x = (cx - r) * TILE_SIZE
+            y = BUTTON_HEIGHT + (cy - r) * TILE_SIZE
+            size = (2*r + 1) * TILE_SIZE
+            pygame.draw.rect(screen, ring_color,
+                             pygame.Rect(x, y, size, size),
+                             ring_thickness)
+
+    # --- 3. Draw selection / move / target overlays ---
+    for r in range(n):
+        for c in range(n):
+            rect = pygame.Rect(c*TILE_SIZE, BUTTON_HEIGHT + r*TILE_SIZE, TILE_SIZE, TILE_SIZE)
             if selected == (r, c):
-                pygame.draw.rect(screen, SELECTED_COLOR, rect, 3)
+                pygame.draw.rect(screen, SELECTED_COLOR, rect, 8)
             if valid_moves and (r, c) in valid_moves:
-                pygame.draw.rect(screen, MOVE_COLOR, rect, 3)
+                pygame.draw.rect(screen, MOVE_COLOR, rect, 8)
             if valid_targets and (r, c) in valid_targets:
-                pygame.draw.rect(screen, TARGET_COLOR, rect, 3)
+                pygame.draw.rect(screen, TARGET_COLOR, rect, 8)
+
 
 def draw_button(screen, rect, label, font):
     mouse_pos = pygame.mouse.get_pos()
@@ -444,45 +468,52 @@ def mode_selection(screen, clock, width, height, font):
     mode = None
     player_is_white = True
     grid_size = 9  # default
-    ai_depth = 2   # default depth
+    ai_depth = 2
     weighted_ai_enabled = True
+    rings_enabled = True
 
     MAX_AI_DEPTH = {
         7: 6,
-        9: 5
+        9: 5,
+        11: 4
     }
 
     # --- Buttons ---
-    # Board size (2 buttons, centered)
     button_width = 100
     gap = 20
-    total_width = 2 * button_width + gap
-    grid_7_btn = pygame.Rect(width//2 - total_width//2, height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
-    grid_9_btn = pygame.Rect(width//2 - total_width//2 + button_width + gap, height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
+    total_width = 3 * button_width + 2 * gap
+
+    grid_7_btn  = pygame.Rect(width//2 - total_width//2,
+                              height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
+    grid_9_btn  = pygame.Rect(grid_7_btn.right + gap,
+                              height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
+    grid_11_btn = pygame.Rect(grid_9_btn.right + gap,
+                              height//2 - 180, button_width, BUTTON_HEIGHT_MENU)
 
     # Mode buttons
-    pvp_btn = pygame.Rect(width//2 - BUTTON_WIDTH//2, height//2 - 90, BUTTON_WIDTH, BUTTON_HEIGHT_MENU)
+    pvp_btn      = pygame.Rect(width//2 - BUTTON_WIDTH//2, height//2 - 90, BUTTON_WIDTH, BUTTON_HEIGHT_MENU)
     ai_white_btn = pygame.Rect(width//2 - BUTTON_WIDTH//2, height//2 - 20, BUTTON_WIDTH, BUTTON_HEIGHT_MENU)
     ai_black_btn = pygame.Rect(width//2 - BUTTON_WIDTH//2, height//2 + 50, BUTTON_WIDTH, BUTTON_HEIGHT_MENU)
 
-    # AI depth slider
     slider_rect = pygame.Rect(width//2 - 150, height//2 + 120, 300, 20)
     knob_width = 20
 
-    # Weighted AI toggle
-    button_width = 250  # any width you want
+    button_width = 250
     toggle_rect = pygame.Rect(width//2 - button_width//2, height//2 + 180, button_width, 40)
 
+    rings_button_width = 250
+    rings_rect = pygame.Rect(width//2 - rings_button_width//2, height//2 + 240, rings_button_width, 40)
 
     while selecting_mode:
         screen.fill((30,30,30))
         title = font.render("Game of Gravity", True, (255,255,255))
         screen.blit(title, (width//2 - title.get_width()//2, height//2 - 250))
 
-        # --- Board size buttons ---
+        # --- Updated grid buttons including 11 ---
         grid_buttons = [
-            {"rect": grid_7_btn, "size": 7},
-            {"rect": grid_9_btn, "size": 9},
+            {"rect": grid_7_btn,  "size": 7},
+            {"rect": grid_9_btn,  "size": 9},
+            {"rect": grid_11_btn, "size": 11},
         ]
         for btn in grid_buttons:
             rect = btn["rect"]
@@ -490,15 +521,16 @@ def mode_selection(screen, clock, width, height, font):
             color = (200,200,50) if size == grid_size else BUTTON_COLOR
             pygame.draw.rect(screen, color, rect)
             pygame.draw.rect(screen, BLACK_COLOR, rect, 2)
-            text = font.render(f"{size} x {size}", True, (0,0,0) if size == grid_size else BUTTON_TEXT)
+            text = font.render(f"{size} x {size}", True,
+                               (0,0,0) if size == grid_size else BUTTON_TEXT)
             screen.blit(text, text.get_rect(center=rect.center))
 
-        # --- Mode buttons ---
+        # Mode buttons
         draw_button(screen, pvp_btn, "Player vs Player", font)
         draw_button(screen, ai_white_btn, "Player vs AI (White)", font)
         draw_button(screen, ai_black_btn, "Player vs AI (Black)", font)
 
-        # --- AI depth slider ---
+        # Slider
         pygame.draw.rect(screen, (200,200,200), slider_rect)
         max_depth_for_grid = MAX_AI_DEPTH[grid_size]
         knob_x = slider_rect.x + (ai_depth / max_depth_for_grid) * (slider_rect.width - knob_width)
@@ -507,7 +539,7 @@ def mode_selection(screen, clock, width, height, font):
         depth_text = font.render(f"AI search depth: {ai_depth}", True, (255,255,255))
         screen.blit(depth_text, (width//2 - depth_text.get_width()//2, slider_rect.y + 30))
 
-        # --- Weighted AI toggle ---
+        # Weighted AI toggle
         toggle_color = (0,200,0) if weighted_ai_enabled else (150,150,150)
         pygame.draw.rect(screen, toggle_color, toggle_rect)
         pygame.draw.rect(screen, (0,0,0), toggle_rect, 2)
@@ -515,25 +547,31 @@ def mode_selection(screen, clock, width, height, font):
         text_surf = font.render(toggle_text, True, (0,0,0))
         screen.blit(text_surf, text_surf.get_rect(center=toggle_rect.center))
 
-        # --- Event handling ---
+        # Rings toggle
+        rings_color = (0,200,0) if rings_enabled else (150,150,150)
+        pygame.draw.rect(screen, rings_color, rings_rect)
+        pygame.draw.rect(screen, (0,0,0), rings_rect, 2)
+        rings_text = "Rings: ON" if rings_enabled else "Rings: OFF"
+        rings_surf = font.render(rings_text, True, (0,0,0))
+        screen.blit(rings_surf, rings_surf.get_rect(center=rings_rect.center))
+
+        # Events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return None, None, None, None, None
+                return None, None, None, None, None, None
+
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mx,my = event.pos
 
-                # Weighted AI toggle
                 if toggle_rect.collidepoint((mx,my)):
                     weighted_ai_enabled = not weighted_ai_enabled
                     continue
 
-                # Board size selection
                 for btn in grid_buttons:
                     if btn["rect"].collidepoint((mx,my)):
                         grid_size = btn["size"]
                         ai_depth = min(ai_depth, MAX_AI_DEPTH[grid_size])
 
-                # Mode selection
                 if pvp_btn.collidepoint((mx,my)):
                     mode = "pvp"
                     selecting_mode = False
@@ -546,6 +584,10 @@ def mode_selection(screen, clock, width, height, font):
                     player_is_white = True
                     selecting_mode = False
 
+                if rings_rect.collidepoint((mx,my)):
+                    rings_enabled = not rings_enabled
+                    continue
+
                 # Slider dragging
                 if knob_rect.collidepoint((mx,my)) or slider_rect.collidepoint((mx,my)):
                     dragging = True
@@ -554,10 +596,14 @@ def mode_selection(screen, clock, width, height, font):
                             if e.type == pygame.MOUSEBUTTONUP:
                                 dragging = False
                             elif e.type == pygame.MOUSEMOTION:
-                                new_x = max(slider_rect.x, min(slider_rect.x + slider_rect.width - knob_width, e.pos[0] - knob_width//2))
-                                ai_depth = round(max_depth_for_grid * (new_x - slider_rect.x)/(slider_rect.width - knob_width))
+                                new_x = max(slider_rect.x,
+                                            min(slider_rect.x + slider_rect.width - knob_width,
+                                                e.pos[0] - knob_width//2))
+                                ai_depth = round(max_depth_for_grid *
+                                                 (new_x - slider_rect.x)/(slider_rect.width - knob_width))
                                 ai_depth = max(0, min(max_depth_for_grid, ai_depth))
 
+                        # redraw everything during drag
                         screen.fill((30,30,30))
                         screen.blit(title, (width//2 - title.get_width()//2, height//2 - 250))
                         for btn in grid_buttons:
@@ -566,7 +612,8 @@ def mode_selection(screen, clock, width, height, font):
                             color = (200,200,50) if size == grid_size else BUTTON_COLOR
                             pygame.draw.rect(screen, color, rect)
                             pygame.draw.rect(screen, BLACK_COLOR, rect, 2)
-                            text = font.render(f"{size} x {size}", True, (0,0,0) if size == grid_size else BUTTON_TEXT)
+                            text = font.render(f"{size} x {size}", True,
+                                               (0,0,0) if size == grid_size else BUTTON_TEXT)
                             screen.blit(text, text.get_rect(center=rect.center))
                         draw_button(screen, pvp_btn, "Player vs Player", font)
                         draw_button(screen, ai_white_btn, "Player vs AI (White)", font)
@@ -577,13 +624,18 @@ def mode_selection(screen, clock, width, height, font):
                         pygame.draw.rect(screen, (255,255,0), knob_rect)
                         depth_text = font.render(f"AI search depth: {ai_depth}", True, (255,255,255))
                         screen.blit(depth_text, (width//2 - depth_text.get_width()//2, slider_rect.y + 30))
-                        # Re-draw toggle while dragging
+
                         toggle_color = (0,200,0) if weighted_ai_enabled else (150,150,150)
                         pygame.draw.rect(screen, toggle_color, toggle_rect)
                         pygame.draw.rect(screen, (0,0,0), toggle_rect, 2)
-                        toggle_text = "Randomized AI: ON" if weighted_ai_enabled else "Randomized AI: OFF"
                         text_surf = font.render(toggle_text, True, (0,0,0))
                         screen.blit(text_surf, text_surf.get_rect(center=toggle_rect.center))
+
+                        rings_color = (0,200,0) if rings_enabled else (150,150,150)
+                        pygame.draw.rect(screen, rings_color, rings_rect)
+                        pygame.draw.rect(screen, (0,0,0), rings_rect, 2)
+                        rings_surf = font.render(rings_text, True, (0,0,0))
+                        screen.blit(rings_surf, rings_surf.get_rect(center=rings_rect.center))
 
                         pygame.display.flip()
                         clock.tick(FPS)
@@ -591,7 +643,9 @@ def mode_selection(screen, clock, width, height, font):
         pygame.display.flip()
         clock.tick(FPS)
 
-    return mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled
+    return mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled, rings_enabled
+
+
 
 # ------------------- Run Game ------------------- #
 def run_game():
@@ -611,18 +665,18 @@ def run_game():
         "- White moves first.",
         "- On your turn, move one ship one square up, down, left, or right.",
         "- A move is valid only if:",
-        "  • The destination is empty and on the board.",
-        "  • It is not farther from the black hole than the starting square.",
-        "  • It has line of sight to at least one enemy ship.",
-        "  • Line of sight: same row or column, not adjacent, and unblocked.",
+        "- • The destination is empty and on the board.",
+        "- • It has line of sight to at least one enemy ship.",
+        "- • Line of sight: same row or column, not adjacent, and unblocked.",
+        "- • It is not moving to an outer ring (optional).",
         "- After moving, pull one visible enemy ship one square closer.",
-        "  • Cannot pull from the direction you just moved from.",
+        "- • Cannot pull from the direction you just moved from.",
         "- Win by pulling an enemy ship into the black hole."
     ]
 
     rules_width = 900
     line_height = fontR.get_height() + 12
-    padding_top, padding_bottom, horizontal_margin = 30, 50, 20
+    padding_top, padding_bottom, horizontal_margin = 30, 50, 10
     wrapped_lines = []
     for line in rules_text:
         wrapped_lines.extend(wrap_text(line, fontR, rules_width - 2*horizontal_margin))
@@ -630,7 +684,7 @@ def run_game():
 
     while True:
         result = mode_selection(screen, clock, width_default, height_default, font)
-        mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled = result
+        mode, player_is_white, grid_size, ai_depth, weighted_ai_enabled, rings_enabled= result
         if mode is None or grid_size is None:
             return
 
@@ -639,7 +693,7 @@ def run_game():
         screen = pygame.display.set_mode((width, height))
 
         # --- Initialize game state ---
-        game = Game(n)
+        game = Game(n, rings_enabled=rings_enabled)
         game.current_player = WHITE
         game.winner = None
 
@@ -754,7 +808,7 @@ def run_game():
                             hint_ai_cancel = True
                             hint_ai_thread.join()
 
-                        game = Game(n)
+                        game = Game(n, rings_enabled)
                         game.current_player = WHITE
                         game.winner = None
                         selected = None
@@ -831,7 +885,6 @@ def run_game():
                             move_from = selected
                             move_to = (r,c)
 
-                            # --- FIXED: Collect all valid targets for this move ---
                             all_moves = game.list_valid_moves()
                             valid_targets = []
                             for m in all_moves:
@@ -884,27 +937,18 @@ def run_game():
             else:
                 draw_board(screen, game, selected, valid_moves, valid_targets)
 
-                cx, cy = game.hole[1], game.hole[0]
-                max_ring = game.n // 2
-                ring_color = (160, 32, 240)
-                ring_thickness = 3
-                for r in range(1, max_ring+1):
-                    x = (cx - r) * TILE_SIZE
-                    y = BUTTON_HEIGHT + (cy - r) * TILE_SIZE
-                    size = (2*r + 1) * TILE_SIZE
-                    pygame.draw.rect(screen, ring_color, pygame.Rect(x, y, size, size), ring_thickness)
 
                 if hint_move is not None:
                     mf, mt, target = hint_move
                     if mf is not None:
                         pygame.draw.rect(screen, (0,255,255), pygame.Rect(
-                            mf[1]*TILE_SIZE, BUTTON_HEIGHT + mf[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 4)
+                            mf[1]*TILE_SIZE, BUTTON_HEIGHT + mf[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 8)
                     if mt is not None:
                         pygame.draw.rect(screen, (255,0,255), pygame.Rect(
-                            mt[1]*TILE_SIZE, BUTTON_HEIGHT + mt[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 4)
+                            mt[1]*TILE_SIZE, BUTTON_HEIGHT + mt[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 8)
                     if target is not None:
                         pygame.draw.rect(screen, (255,255,0), pygame.Rect(
-                            target[1]*TILE_SIZE, BUTTON_HEIGHT + target[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 4)
+                            target[1]*TILE_SIZE, BUTTON_HEIGHT + target[0]*TILE_SIZE, TILE_SIZE, TILE_SIZE), 8)
 
                 draw_button(screen, menu_btn, "Menu", font)
                 draw_button(screen, restart_btn, "Restart", font)
