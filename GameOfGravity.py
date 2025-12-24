@@ -6,7 +6,9 @@ from typing import Tuple, Optional
 import copy
 import math
 import sys
-
+# Compile:
+# pyinstaller --onefile --windowed GameOfGravity.py
+# & "C:\Users\[user]\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\Scripts\pyinstaller.exe" --onefile --windowed GameOfGravity.py
 # ---------- Game Logic ----------
 EMPTY = None
 
@@ -467,10 +469,10 @@ def mode_selection(screen, clock, width, height, font):
     selecting_mode = True
     mode = None
     player_is_white = True
-    grid_size = 9  # default
-    ai_depth = 2
+    grid_size = 7  # default
+    ai_depth = 3
     weighted_ai_enabled = True
-    rings_enabled = True
+    rings_enabled = False
 
     MAX_AI_DEPTH = {
         7: 6,
